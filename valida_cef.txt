@@ -1,0 +1,222 @@
+#### Script de Validacao Caixa ####
+### by Keslley Kledston Santos  ###
+####      version 1.1          ####
+##### Declaracao de Variaveis #####
+
+#CONCENTRADOR valores devem ser MN ou BE
+:global CONCENTRA BE
+
+#Unidade Federativa - Estado (AC, AM, AP, BE, RO, RR)
+#UNID_CEF indica a designação da Agencia Ex.: (PE-CEF-AM-3449.ag.manauara)
+:global UNIDCEF PE-CEF-PA-3229.Ag.Castanheira-Rede02
+
+:global IPLAN 10.200.6.41
+
+###> IPLO - loopback central, IPLO1 - loopback de VRF
+:global IPLO 172.16.5.36
+:global IPLO1 10.61.5.36
+:global IPWAN 10.193.0.46
+:global BGPASAG 
+:global BGPPEERAG 
+:global IPGRE 172.31.102.142
+:global IPGRECTC 172.31.112.142
+# Variaveis Estaticas
+:global iBGPAS 263450
+:global BGPPEERGITEC
+:global NETLAN (($IPLAN -1)."/30")
+:global NETWAN (($IPWAN -2)."/30")
+:global NETGRE (($IPGRE -2)."/30")
+:global NETGRECTC (($IPGRECTC -2)."/30")
+:global GITECMN 168.232.158.177
+:global GITECBE 186.228.153.195
+:global CTC 189.50.88.90
+{[:if ($CONCENTRA = "MN") do={:global IPGITEC $GITECMN}] [:if ($CONCENTRA = "BE") do={:global IPGITEC $GITECBE} else={:log error "Corrija a Variavel CONCENTRA"}]}
+
+:log warning "===========FIM DAS VARIAVEIS ============="
+
+	
+
+#SYSTEMA
+:log warning ">>>>>> Peparando Sistema >>>>>>"
+/system identity set name=$UNIDCEF
+/user
+add name=keslley password=t3l3c0m group=full
+add name=AlfaMaster password=@lf@M@st3r group=full
+add name=suporte password=suporteabc* group=write
+/snmp community
+set [ find default=yes ] name=alfatelecom
+/snmp
+set contact=suporte@alfatelecom.info enabled=yes location=alfatelecom trap-version=2
+/system clock set time-zone-name=America/Manaus
+/system ntp client set enabled=yes primary-ntp=200.160.7.186 secondary-ntp=200.192.232.8
+
+###### Atencao - Comandos Remotos
+### Criar L2TP CTC
+/interface l2tp-client add connect-to=189.50.88.90 disabled=no name=VPN-CTC password=s3cur1ty user=$UNIDCEF  max-mru=1500 max-mtu=1500
+/system ssh address=189.50.88.90 port=50022 user=Provisionamento command="{[/ppp secret add name=\"$UNIDCEF\" password=s3cur1ty profile=VPN-CEF02]}"
+    
+{{:if ($CONCENTRA = "MN") do={[/interface l2tp-client add connect-to=168.232.158.177 disabled=no name=VPN-GITEC password=s3cur1ty user=$UNIDCEF  max-mru=1500 max-mtu=1500] [/system ssh address=168.232.158.177 port=50022 user=Provisionamento command="{[/ppp secret add name=\"$UNIDCEF\" password=s3cur1ty profile=VPN-CEF02]}"]} else={:if ($CONCENTRA = "BE") do={[/interface l2tp-client add connect-to=186.228.153.195 disabled=no name=VPN-GITEC password=s3cur1ty user=$UNIDCEF  max-mru=1500 max-mtu=1500] [/system ssh address=186.228.153.195 port=50022 user=Provisionamento command="{[/ppp secret add name=\"$UNIDCEF\" password=s3cur1ty profile=VPN-CEF02]}"]
+}}}}
+
+
+#### Capturar IP recebido na Conexão L2TP
+:global IPVPNGITEC [/ip address get [find interface="VPN-GITEC"] address] 
+:set $IPVPNGITEC [:pick $IPVPNGITEC 0 [:find $IPVPNGITEC "/" -1]]
+##
+:global IPVPNCTC [/ip address get [find interface="VPN-CTC"] address] 
+:set $IPVPNCTC [:pick $IPVPNCTC 0 [:find $IPVPNCTC "/" -1]]
+
+/ip service
+set telnet port=50023
+set ftp port=50021
+set www port=50080
+set ssh port=50022
+:log warning "<<<<<< Sistema Pronto >>>>>>"
+
+
+#INTERFACES
+:log warning ">>>>>> Peparando Interfaces >>>>>>"
+/interface bridge add name=loopback protocol=none
+/interface gre
+add allow-fast-path=no ipsec-secret=41f4w00mp !keepalive local-address=$IPVPNCTC mtu=1500 name=GRE-CTC remote-address=10.4.3.1
+{{:if ($CONCENTRA="MN") do={/interface gre add allow-fast-path=no ipsec-secret=41f4w00mp !keepalive local-address=$IPVPNGITEC mtu=1500 name=("GRE-GITEC-".$CONCENTRA) remote-address=10.4.2.1} else={:if ($CONCENTRA="BE") do={/interface gre add allow-fast-path=no ipsec-secret=41f4w00mp !keepalive local-address=$IPVPNGITEC mtu=1500 name=("GRE-GITEC-".$CONCENTRA) remote-address=10.4.5.1}}}}
+
+
+/ip address add interface=ether10 address=($IPLAN."/30") comment="DownLink Cliente"
+/ip address add interface=loopback address=($IPLO."/32")
+/ip address add interface=("GRE-GITEC-".$CONCENTRA) address=($IPGRE."/30")
+/ip address add interface=("GRE-CTC") address=($IPGRECTC."/30")
+
+#Declara dados para Config do CTC
+:global NAMEGRE ("GRE-".$UNIDCEF)
+:global IPCTCGRE (($IPGRECTC -1)."/30")
+:global IPGITECGRE (($IPGRE -1)."/30")
+    
+###### ESTA PARTE DEVE SER FEITA COM ATENCAO E INSERINDO AS SENHAS (GRE, OSPF, MPLS)
+## Cria GRE na CTC
+/system ssh address=189.50.88.90 port=50022 user=Provisionamento command="{[/interface gre add allow-fast-path=no ipsec-secret=41f4w00mp !keepalive remote-address=(\"$IPVPNCTC\") mtu=1500 name=(\"GRE-\".\"$UNIDCEF\") local-address=10.4.3.1]}"
+/system ssh address=189.50.88.90 port=50022 user=Provisionamento command="{[/routing ospf network add area=backbone network=$NETGRECTC] }"
+/system ssh address=189.50.88.90 port=50022 user=Provisionamento command="{[/mpls ldp interface add interface=$NAMEGRE]}"
+/system ssh address=189.50.88.90 port=50022 user=Provisionamento command="{[/ip address add address=$IPCTCGRE interface=$NAMEGRE]}"
+/system ssh address=189.50.88.90 port=50022 user=Provisionamento command="{[/ppp secret set $UNIDCEF remote-address=$IPVPNCTC]}"
+/system ssh address=189.50.88.90 port=50022 user=Provisionamento command="{[/ppp active remove [find name=$UNIDCEF ]]}"
+                 
+                 
+                 
+                 
+#### COMANDOS EXTERNOS ####
+
+## Cria GRE na GITEC-MN 
+{{:if ($CONCENTRA="MN") do={[/system ssh address=168.232.158.177 port=50022 user=Provisionamento command="{[/interface gre add allow-fast-path=no ipsec-secret=41f4w00mp !keepalive remote-address=$IPVPNGITEC mtu=1500 name=$NAMEGRE local-address=10.4.2.1]}"]} else={:if ($CONCENTRA = "BE") do={[/system ssh address=186.228.153.195 port=50022 user=Provisionamento command="{[/interface gre add allow-fast-path=no ipsec-secret=41f4w00mp !keepalive remote-address=$IPVPNGITEC mtu=1500 name=$NAMEGRE local-address=10.4.5.1]}"] }}}}
+
+
+## Cria GRE na GITEC-MN 
+{{:if ($CONCENTRA="MN") do={[/system ssh address=168.232.158.177 port=50022 user=Provisionamento command="{[/routing ospf network add area=backbone network=$NETGRE]}"] [/system ssh address=168.232.158.177 port=50022 user=Provisionamento command="{[/ip address add address=(($IPGRE -1).\"/30\") interface=$NAMEGRE]}"] [/system ssh address=168.232.158.177 port=50022 user=Provisionamento command="{[/mpls ldp interface add interface=$NAMEGRE]}"] [/system ssh address=168.232.158.177 port=50022 user=Provisionamento command="{[/ppp secret set $UNIDCEF remote-address=$IPVPNGITEC]}"] [/system ssh address=168.232.158.177 port=50022 user=Provisionamento command="{[/ppp active remove [find name=$UNIDCEF ]]}"]} else={:if ($CONCENTRA = "BE") do={[/system ssh address=186.228.153.195 port=50022 user=Provisionamento command="{[/routing ospf network add area=backbone network=$NETGRE]}"] [/system ssh address=186.228.153.195 port=50022 user=Provisionamento command="{[/ip address add address=(($IPGRE -1).\"/30\") interface=$NAMEGRE]}"] [/system ssh address=186.228.153.195 port=50022 user=Provisionamento command="{[/mpls ldp interface add interface=$NAMEGRE]}"] [/system ssh address=186.228.153.195 port=50022 user=Provisionamento command="{[/ppp secret set $UNIDCEF remote-address=$IPVPNGITEC]}"] [/system ssh address=186.228.153.195 port=50022 user=Provisionamento command="{[/ppp active remove [find name=$UNIDCEF ]]}"]}}}}
+:log warning "<<<<<< Interfaces Prontas >>>>>>"
+
+
+:log warning ">>>>>> Peparando Filtros >>>>>>"
+/routing filter
+add action=discard chain=ospf-in comment="Nega IP de Peer" prefix=168.232.158.177
+add action=discard chain=ospf-in comment="Nega IP de Peer" prefix=168.232.156.0/22 prefix-length=22-32
+add action=discard chain=ospf-in comment="Nega IP de Peer" prefix=177.91.232.0/22 prefix-length=22-32
+add action=discard chain=ospf-in comment="Nega rota default" prefix=0.0.0.0/0
+add chain=ospf-in prefix=172.16.5.0/24 prefix-length=24-32
+add chain=ospf-in prefix=172.16.2.0/24 prefix-length=24-32
+add chain=ospf-in prefix=172.16.3.0/24 prefix-length=24-32
+add action=discard chain=ospf-in
+add action=discard chain=eBGP-CEF-IN disabled=yes prefix=0.0.0.0 comment="Nega Rota default Originado na agencia"
+add action=accept chain=eBGP-CEF-IN comment="End-Point -GRE" prefix=10.60.7.0/24
+add action=accept chain=eBGP-CEF-IN comment="End-Point -GRE" prefix=10.60.39.0/24
+add action=accept chain=eBGP-CEF-IN comment="Peering - Concentradores" prefix=192.168.248.0/24 prefix-length=24-32
+add action=accept chain=eBGP-CEF-IN comment="Peering - Agencias" prefix=10.198.58.0/23 prefix-length=23-30
+add action=accept chain=eBGP-CEF-IN comment="Peering - GRE - GITEC-MN" prefix=10.198.0.0/23 prefix-length=23-30
+add action=discard chain=eBGP-CEF-IN prefix=10.192.0.0/14 prefix-length=14-32
+add action=accept chain=eBGP-CEF-IN comment="Peering - End Point VPN" prefix=10.198.35.0/29 prefix-length=29-32
+add action=discard chain=eBGP-CEF-IN prefix=10.0.0.0/14 prefix-length=14-32
+add action=discard chain=eBGP-CEF-IN prefix=10.252.0.0/14 prefix-length=14-32
+add action=discard chain=eBGP-CEF-IN prefix=10.222.0.0/15 prefix-length=14-32
+add action=discard chain=eBGP-CEF-IN prefix=10.220.0.0/15 prefix-length=15-32
+add action=discard chain=eBGP-CEF-IN prefix=10.218.0.0/15 prefix-length=15-32
+add action=discard chain=eBGP-CEF-IN prefix=10.216.0.0/15 prefix-length=15-32
+add action=discard chain=eBGP-CEF-IN prefix=10.128.0.0/14 prefix-length=14-32
+add action=discard chain=eBGP-CEF-IN prefix=10.122.0.0/15 prefix-length=15-32
+add action=discard chain=eBGP-CEF-IN prefix=10.120.0.0/15 prefix-length=15-32
+add action=discard chain=eBGP-CEF-IN prefix=10.118.0.0/15 prefix-length=15-32
+add action=discard chain=eBGP-CEF-IN prefix=192.168.0.254
+add action=discard chain=eBGP-CEF-IN prefix=172.16.32.0/24 prefix-length=24-32
+add action=discard chain=eBGP-CEF-IN prefix=172.17.32.0/24 prefix-length=24-32
+add action=discard chain=eBGP-CEF-IN prefix=172.24.33.0/28 prefix-length=28-32
+add action=discard chain=eBGP-CEF-IN prefix=172.24.32.110 prefix-length=32
+add action=discard chain=eBGP-CEF-IN prefix=172.24.45.240/28 prefix-length=28-32
+{{:if ($CONCENTRA="MN") do={add action=accept bgp-as-path="^65050|65192\$" chain=eBGP-CEF-IN} else={:if ($CONCENTRA="BE") do={add action=accept bgp-as-path="^65050|65191\$" chain=eBGP-CEF-IN} else={:log error "Insira corretamente a designacao da Concentracao"}}}}
+add action=discard chain=eBGP-CEF-IN disabled=yes
+add action=accept bgp-as-path="^65050|65192|65191\$" chain=eBGP-CEF-OUT disabled=yes
+add action=accept chain=eBGP-CEF-OUT disabled=yes prefix=10.198.58.0/23 prefix-length=23-30
+add action=accept chain=eBGP-CEF-OUT disabled=yes prefix=192.168.248.0/24 prefix-length=24-30
+add action=discard chain=eBGP-CEF-OUT disabled=yes
+add action=accept chain=eBGP-CEF-OUT disabled=yes prefix=0.0.0.0/0 prefix-length=0-32
+
+:log warning "<<<<<< Filtros Prontos >>>>>>"
+
+#OSPF
+:log warning ">>>>>> Preparando OSPF >>>>>>"
+/routing ospf instance
+set [find default=yes] name=$UNIDCEF router-id=$IPLO
+/routing ospf network
+add area=backbone network=$NETLAN
+add area=backbone network=$NETGRE
+add area=backbone network=$NETGRECTC
+add area=backbone network=$IPLO
+/routing ospf interface
+:log error ">>Nao Esqueca de Anunciar a Network no OSPF do POP<<"
+:log warning "<<<<<< OSPF Preparado >>>>>>"
+
+
+#VRF
+:log warning ">>>>>> Preparando VRF >>>>>>"
+/ip route vrf
+add export-route-targets=($iBGPAS.":3") import-route-targets=($iBGPAS.":3") interfaces=ether10 route-distinguisher=($iBGPAS.":3") routing-mark=VRF-CEF-MN
+:delay 5
+:log warning "<<<<<< VRF Preparado >>>>>>"
+
+
+
+:log warning ">>>>>> Preparando MPLS >>>>>>"
+/mpls ldp set enabled=yes lsr-id=$IPLO transport-address=$IPLO
+/mpls ldp interface
+add interface=GRE-CTC
+add interface=("GRE-GITEC-".$CONCENTRA)
+add interface=ether10
+/mpls interface set 0 mpls-mtu=1550
+:log warning "<<<<<< MPLS Preparado >>>>>>"
+
+
+:log warning ">>>>>> Preparando BGP >>>>>>"
+/routing bgp instance
+set default as=$iBGPAS client-to-client-reflection=no redistribute-other-bgp=yes router-id=$IPLO
+add as=$iBGPAS name=eBGP-CEF router-id=$IPLO1 routing-table=VRF-CEF-MN
+#Seleciona o ASN da Agencia
+{{:if ($CONCENTRA="MN") do={[:set $BGPASAG 65192 ] [:set $BGPPEERGITEC 172.16.3.201]} else={:if ($CONCENTRA="BE") do={[:set $BGPASAG 65191] [:set $BGPPEERGITEC 172.16.5.254] } else={:log error "Insira corretamente a designacao da Concentracao"}}}}
+
+/routing bgp peer
+add address-families=ip,l2vpn,vpnv4 multihop=yes name=iBGP-CTC-BSB remote-address=172.16.2.254 remote-as=$iBGPAS ttl=default update-source=loopback
+add address-families=ip,l2vpn,vpnv4 multihop=yes name=("iBGP-GITEC-".$CONCENTRA) remote-address=$BGPPEERGITEC remote-as=$iBGPAS ttl=default update-source=loopback
+add address-families=ip,l2vpn,vpnv4 instance=eBGP-CEF name=eBGP-CEF nexthop-choice=force-self remote-address=($IPLAN +1) remote-as=$BGPASAG ttl=default update-source=ether10 in-filter=eBGP-CEF-IN
+/routing bgp instance vrf add redistribute-connected=yes redistribute-other-bgp=yes routing-mark=VRF-CEF-MN redistribute-static=yes
+:log warning "<<<<<< BGP Preparado >>>>>>"
+
+
+
+#Cria Peer BGP CTC
+/system ssh address=172.16.2.254 port=50022 user=Provisionamento command="{[/routing bgp peer add address-families=ip,l2vpn,vpnv4 multihop=yes name=$UNIDCEF nexthop-choice=force-self remote-address=$IPLO remote-as=263450 route-reflect=no=yes ttl=default update-source=loopback]}"
+
+{{:if ($CONCENTRA="MN") do={[/system ssh address=172.16.3.201 port=50022 user=Provisionamento command="{[/routing bgp peer add address-families=ip,l2vpn,vpnv4 multihop=yes name=$UNIDCEF nexthop-choice=force-self remote-address=$IPLO remote-as=263450 route-reflect=no ttl=default update-source=loopback]}"]} else={:if ($CONCENTRA = "BE") do={[/system ssh address=172.16.5.254 port=50022 user=Provisionamento command="{[/routing bgp peer add address-families=ip,l2vpn,vpnv4 multihop=yes name=$UNIDCEF nexthop-choice=force-self remote-address=$IPLO remote-as=263450 route-reflect=no ttl=default update-source=loopback]}"]}}}}
+
+
+
+###################### Fim do Script ##########################
+
+
+
+
